@@ -90,7 +90,10 @@ class XgbClient(fl.client.Client):
         self.bst = None
         self.config = None
     
-    # Unlike neural network training, XGBoost trees are not started from a specified random weights. In this case, we do not use get_parameters and set_parameters to initialise model parameters for XGBoost. As a result, let’s return an empty tensor in get_parameters when it is called by the server at the first round.
+    # Unlike neural network training, XGBoost trees are not started from a specified random weights. 
+    # In this case, we do not use get_parameters and set_parameters to initialise model parameters 
+    # for XGBoost. As a result, let’s return an empty tensor in get_parameters when it is called by 
+    # the server at the first round.
     def get_parameters(self, ins: GetParametersIns) -> GetParametersRes:
         _ = (self, ins)
         return GetParametersRes(

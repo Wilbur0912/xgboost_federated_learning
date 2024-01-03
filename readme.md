@@ -68,7 +68,7 @@ dvalid = xgb.DMatrix(X_valid, label=y_valid_encoded)
 ```
 
 model parameters setting
-```python=
+```python
 params = {
     "objective": "multi:softmax",  # or "objective": "multi:softprob",
     "num_class": 10,  # Set num_classes if known

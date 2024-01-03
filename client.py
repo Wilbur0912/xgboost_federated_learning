@@ -41,6 +41,7 @@ y_valid = valid_data[target]
 # Create LabelEncoder
 label_encoder = LabelEncoder()
 
+# train test split
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 
@@ -51,6 +52,13 @@ y_test_encoded = label_encoder.fit_transform(y_test)
 
 y_valid_encoded = label_encoder.fit_transform(y_valid)
 
+# convert data format to DMatrix, which is acceptable by xgboost
+dtrain = xgb.DMatrix(X_train, label=y_train_encoded)
+
+dtest = xgb.DMatrix(X_test, label=y_test_encoded)
+
+dvalid = xgb.DMatrix(X_valid, label=y_valid_encoded)
+
 params = {
     "objective": "multi:softmax",  # or "objective": "multi:softprob",
     "num_class": 10,  # Set num_classes if known
@@ -59,23 +67,16 @@ params = {
     # Other hyperparameters
 }
 
-
-dtrain = xgb.DMatrix(X_train, label=y_train_encoded)
-
-dtest = xgb.DMatrix(X_test, label=y_test_encoded)
-
-dvalid = xgb.DMatrix(X_valid, label=y_valid_encoded)
-
-
+# how many rounds of local boost
 num_rounds = 1
 
-# Integrate the above data into the Flower client
 class XgbClient(fl.client.Client):
+    # in the first step, we make initial model(bst) and its congfig = none
     def __init__(self):
         self.bst = None
         self.config = None
     
-    # initialize the model parameters
+    # Unlike neural network training, XGBoost trees are not started from a specified random weights. In this case, we do not use get_parameters and set_parameters to initialise model parameters for XGBoost. As a result, let’s return an empty tensor in get_parameters when it is called by the server at the first round.
     def get_parameters(self, ins: GetParametersIns) -> GetParametersRes:
         _ = (self, ins)
         return GetParametersRes(
@@ -86,8 +87,9 @@ class XgbClient(fl.client.Client):
             parameters=Parameters(tensor_type="", tensors=[]),
         )
     
+    # local training
     def _local_boost(self):
-    # Update trees based on local training data.
+        # Update trees based on local training data.
         for i in range(num_rounds):
             self.bst.update(dtrain, self.bst.num_boosted_rounds())
 
@@ -98,17 +100,20 @@ class XgbClient(fl.client.Client):
         ]
         
         return bst
-
+    
     def fit(self, ins: FitIns) -> FitRes:
         if not self.bst:
             # First round local training
             log(INFO, "Start training at round 1")
+            # build the first xgboost model
             bst = xgb.train(
                 params,
                 dtrain,
                 num_boost_round=num_rounds,
                 evals=[(dtest, "test"), (dtrain, "train")],
             )
+            
+            # save model to local storage
             self.config = bst.save_config()
             self.bst = bst
         else:
@@ -119,22 +124,15 @@ class XgbClient(fl.client.Client):
             # Load global model into booster
             self.bst.load_model(global_model)
             self.bst.load_config(self.config)
-
-            # bst = xgb.train(
-            #     params,
-            #     dtrain,
-            #     num_boost_round=num_rounds,
-            #     evals=[(dtest, "test"), (dtrain, "train")],
-            #     xgb_model = self.bst
-            # )
-
+            
             bst = self._local_boost()
-
+            
+        # save model as json format
         local_model = bst.save_raw("json")
+        # transfer json formet to byte array
         local_model_bytes = bytes(local_model)
 
-        # Local model evaluation, compute training loss
-
+        # return model parameters back to server to do aggregation
         return FitRes(
             parameters=fl.common.Parameters(tensor_type="", tensors=[local_model_bytes]),
             num_examples=len(X_train),
@@ -150,7 +148,8 @@ class XgbClient(fl.client.Client):
         # Local model evaluation, compute validation loss
         valid_predictions = self.bst.predict(dvalid)
         valid_accuracy = accuracy_score(y_valid_encoded, valid_predictions)
-
+        
+        # return evaluation back to server to do aggregation
         return fl.common.EvaluateRes(
             loss=0.0,
             num_examples=len(X_valid),

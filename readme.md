@@ -1,7 +1,7 @@
 # Xgboost Federated Learning code explain
 
 import dependencies
-```python=
+```python
 import xgboost as xgb
 import flwr as fl
 import pandas as pd
@@ -25,7 +25,7 @@ from flwr.common import (
 ```
 
 import data and preprocessing
-```python=
+```python
 # Define features and labels
 features = ["Height", "Weight", "BMI", "FSR1", "FSR2", "FSR3", "FSR4", "FSR5", "FSR6", "FSR7", "FSR8", "FSR9"]
 target = "Posture"
@@ -82,7 +82,7 @@ num_rounds = 1
 ```
 
 building client
-```python=
+```python
 class XgbClient(fl.client.Client):
     
     # in the first step, we make initial model(bst) and its congfig = none
@@ -176,7 +176,7 @@ class XgbClient(fl.client.Client):
 
 ```
 Start the Flower client
-```python=
+```python
 # Start the Flower client
 fl.client.start_client(server_address="127.0.0.1:8080", client=XgbClient())
 ```

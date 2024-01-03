@@ -6,6 +6,7 @@ from sklearn.metrics import accuracy_score
 from flwr.common import Code, Status
 from flwr.common.logger import log
 from logging import INFO
+from sklearn.model_selection import train_test_split
 from flwr.common import (
     Code,
     EvaluateIns,
@@ -31,8 +32,8 @@ valid_data_path = "client_data/record_valid1.csv"
 valid_data = pd.read_csv(valid_data_path, names=column_names, encoding='utf-8', index_col=False)
 
 # Extract features and labels from training and validation data
-X_train = train_data[features].astype(float)
-y_train = train_data[target]
+X = train_data[features].astype(float)
+y = train_data[target]
 
 X_valid = valid_data[features].astype(float)
 y_valid = valid_data[target]
@@ -40,18 +41,31 @@ y_valid = valid_data[target]
 # Create LabelEncoder
 label_encoder = LabelEncoder()
 
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+
 # Encode target variable as numerical labels
 y_train_encoded = label_encoder.fit_transform(y_train)
-y_valid_encoded = label_encoder.transform(y_valid)
+
+y_test_encoded = label_encoder.fit_transform(y_test)
+
+y_valid_encoded = label_encoder.fit_transform(y_valid)
 
 params = {
     "objective": "multi:softmax",  # or "objective": "multi:softprob",
     "num_class": 10,  # Set num_classes if known
     "eta": 0.3,
+    "max_depth": 6,
     # Other hyperparameters
 }
+
+
 dtrain = xgb.DMatrix(X_train, label=y_train_encoded)
+
+dtest = xgb.DMatrix(X_test, label=y_test_encoded)
+
 dvalid = xgb.DMatrix(X_valid, label=y_valid_encoded)
+
 
 num_rounds = 1
 
@@ -60,20 +74,8 @@ class XgbClient(fl.client.Client):
     def __init__(self):
         self.bst = None
         self.config = None
-
-    def _local_boost(self):
-        # Update trees based on local training data
-        for i in range(num_rounds):
-            self.bst.update(dtrain, self.bst.num_boosted_rounds())
-
-        # Extract the last N=num_local_round trees for server aggregation
-        bst = self.bst[
-            self.bst.num_boosted_rounds()
-            - num_rounds : self.bst.num_boosted_rounds()
-        ]
-
-        return bst
     
+    # initialize the model parameters
     def get_parameters(self, ins: GetParametersIns) -> GetParametersRes:
         _ = (self, ins)
         return GetParametersRes(
@@ -84,6 +86,19 @@ class XgbClient(fl.client.Client):
             parameters=Parameters(tensor_type="", tensors=[]),
         )
     
+    def _local_boost(self):
+    # Update trees based on local training data.
+        for i in range(num_rounds):
+            self.bst.update(dtrain, self.bst.num_boosted_rounds())
+
+        # Extract the last N=num_local_round trees for sever aggregation
+        bst = self.bst[
+            self.bst.num_boosted_rounds()
+            - num_rounds : self.bst.num_boosted_rounds()
+        ]
+        
+        return bst
+
     def fit(self, ins: FitIns) -> FitRes:
         if not self.bst:
             # First round local training
@@ -92,18 +107,26 @@ class XgbClient(fl.client.Client):
                 params,
                 dtrain,
                 num_boost_round=num_rounds,
-                evals=[(dvalid, "validate"), (dtrain, "train")],
+                evals=[(dtest, "test"), (dtrain, "train")],
             )
             self.config = bst.save_config()
             self.bst = bst
         else:
-            # Perform model training here
+            # get global_model
             for item in ins.parameters.tensors:
                 global_model = bytearray(item)
 
             # Load global model into booster
             self.bst.load_model(global_model)
             self.bst.load_config(self.config)
+
+            # bst = xgb.train(
+            #     params,
+            #     dtrain,
+            #     num_boost_round=num_rounds,
+            #     evals=[(dtest, "test"), (dtrain, "train")],
+            #     xgb_model = self.bst
+            # )
 
             bst = self._local_boost()
 
